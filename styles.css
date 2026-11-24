@@ -60,6 +60,19 @@ svg { display: block; }
 .readings li { font: 500 12px/1 var(--sans); padding: 7px 10px; border-radius: 999px; background: var(--soil-3); color: var(--ink-2); border: 1px solid var(--line); }
 .readings li::before { content: "Reading · "; color: var(--ink-3); }
 .stop-note { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+/* September / Now: two captions for the same picture */
+.lens { display: grid; gap: 10px; padding: 14px; border-radius: 14px; background: var(--soil-2); border: 1px solid var(--line); }
+.lens-tabs { display: inline-flex; justify-self: start; padding: 3px; border-radius: 999px; background: var(--soil-3); border: 1px solid var(--line); }
+.lens-tabs button { font: 600 12px/1 var(--sans); letter-spacing: 0.04em; padding: 8px 13px; border-radius: 999px; color: var(--ink-3); transition: background-color 0.25s, color 0.25s; }
+.lens-tabs button[aria-pressed="true"] { background: var(--ink); color: var(--soil); }
+.lens[data-mode="now"] .lens-tabs button[aria-pressed="true"] { background: var(--gold); }
+.lens-k { display: block; font: 500 11px/1.3 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+.lens-cap p { margin: 0; text-wrap: pretty; }
+.lens-cap[data-m="then"] p { font: 400 15px/1.55 var(--sans); color: var(--ink-2); }
+.lens-cap[data-m="now"] p { font: 400 17px/1.55 var(--serif); color: var(--ink); }
+.lens-cap:not([hidden]) { animation: lensIn 0.45s ease both; }
+@keyframes lensIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .lens-cap:not([hidden]) { animation: none; } }
 .stop-note::before { content: "Note · "; }
 
 .begin { justify-self: start; display: inline-flex; align-items: center; gap: 10px; margin-top: 4px; padding: 14px 20px; border-radius: 999px; background: var(--harvest); color: #1d130a; font: 600 15px/1 var(--sans); }
@@ -257,3 +270,17 @@ button, a, .stage { touch-action: manipulation; }
   .brand { min-height: 44px; }
   .dots button { height: 44px; }
 }
+
+/* ?present: projector-friendly. Bigger type, a wider story column, no extra chrome, the cursor hides when still. */
+.present { --panel-w: clamp(440px, 34vw, 600px); }
+.present .body p { font-size: 19px; }
+.present .stop h2 { font-size: 38px; }
+.present .lens-cap[data-m="then"] p { font-size: 17px; }
+.present .lens-cap[data-m="now"] p { font-size: 21px; }
+.present .lens-tabs button { font-size: 13px; padding: 9px 15px; }
+.present .readings li { font-size: 13px; }
+.present .about-btn, .present .hint, .present .layers, .present .key { display: none; }
+.present.idle, .present.idle * { cursor: none !important; }
+.clock { margin: 0 0 0 auto; padding: 6px 10px; border-radius: 8px; font: 600 13px/1 var(--sans); font-variant-numeric: tabular-nums; color: var(--ink-2); background: rgba(20, 17, 13, 0.72); border: 1px solid var(--line); }
+.clock[data-warn="wrap"] { color: var(--gold); }
+.clock[data-warn="stop"] { color: #ff8a70; border-color: rgba(255, 138, 112, 0.5); }

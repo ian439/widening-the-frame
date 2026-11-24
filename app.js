@@ -5,7 +5,7 @@ import { Line2 } from "three/addons/lines/Line2.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { Sky } from "three/addons/objects/Sky.js";
-import { STOPS, SITES, LAYERS, REFERENCES } from "./story.js?v=7";
+import { STOPS, SITES, LAYERS, REFERENCES } from "./story.js?v=8";
 
 // Heights are true scale (1:1). Sun placed to match the shadows in the county's 2025 flight.
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -2368,6 +2368,29 @@ function openPhoto(src, alt) {
   $("#lbClose").focus();
 }
 
+// two captions for the same picture: how I'd have captioned it for CfA in September, and how I'd caption it now.
+// September pulls the map's gold frame in to what the photo shows; Now lets it back out.
+function lensHTML(c) {
+  return `<div class="lens" data-mode="then">
+    <div class="lens-tabs" role="group" aria-label="Two captions for this stop">
+      <button type="button" data-m="then" aria-pressed="true">September</button>
+      <button type="button" data-m="now" aria-pressed="false">Now</button>
+    </div>
+    <div class="lens-cap" data-m="then"><span class="lens-k">${esc(c.thenLabel || "How I'd have captioned it for CfA in September")}</span><p>${esc(fill(c.then))}</p></div>
+    <div class="lens-cap" data-m="now" hidden><span class="lens-k">${esc(c.nowLabel || "How I'd caption it now")}</span><p>${esc(fill(c.now))}</p></div>
+  </div>`;
+}
+const LENS = { touched: false };
+function setLens(k, mode, byUser) {
+  const sec = sections[k], s = STOPS[k];
+  if (!sec || !s.captions) return;
+  const box = sec.querySelector(".lens");
+  box.dataset.mode = mode;
+  box.querySelectorAll(".lens-tabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.m === mode)));
+  box.querySelectorAll(".lens-cap").forEach((c) => (c.hidden = c.dataset.m !== mode));
+  if (byUser) LENS.touched = true;
+  if (k === state.i && s.frame) goals.focus.z = mode === "then" ? s.frame * 0.45 : s.frame;
+}
 const sections = [], carousels = [];
 STOPS.forEach((s, k) => {
   const sec = document.createElement("section");
@@ -2377,6 +2400,7 @@ STOPS.forEach((s, k) => {
   const eyebrow = s.intro ? s.eyebrow : `Stop ${k} of ${STOPS.length - 1} · ${s.place}`;
   let html = `<p class="eyebrow">${esc(eyebrow)}</p>${head}`;
   if (s.media) html += mediaHTML(s.media);
+  if (s.captions) html += lensHTML(s.captions);
   if (s.placeholder) html += `<div class="placeholder"><div>${esc(s.placeholder)}<small>Coming in the final version</small></div></div>`;
   html += `<div class="body">${s.body.map((p) => `<p>${esc(fill(p))}</p>`).join("")}</div>`;
   if (s.readings) html += `<ul class="readings">${s.readings.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
@@ -2398,6 +2422,13 @@ STOPS.forEach((s, k) => {
   carousels.push(s.media ? wireMedia(sec, s.media, k) : null);
 });
 stopsEl.querySelector('[data-a="play"]')?.addEventListener("click", () => play(true));
+stopsEl.addEventListener("click", (e) => {
+  const b = e.target.closest(".lens-tabs button");
+  if (!b) return;
+  const k = +b.closest(".stop").dataset.k;
+  if (k !== state.i) return;
+  setLens(k, b.dataset.m, true);
+});
 
 function scrollToStop(k) {
   k = THREE.MathUtils.clamp(k, 0, STOPS.length - 1);
@@ -2414,11 +2445,29 @@ sections.forEach((s) => stopObserver.observe(s));
 
 // ---------------------------------------------------------------- play the walk: hands-free, like a film
 const PLAY = { on: false, t0: 0 };
-function dwell(k) {
+const LENS_FLIP_MS = 5200;
+// ?present: for the EcoGroup presentation (3½ min each, hard stop at 4). Bigger type, arrow keys or a clicker step
+// through stops like slides, Play is paced to finish in PRESENT_MS, and a small clock keeps time.
+const PRESENT = new URLSearchParams(location.search).has("present");
+const PRESENT_MS = 200000;
+if (PRESENT) document.body.classList.add("present");
+function baseDwell(k) {
   const s = STOPS[k];
   if (s.intro) return 5000;
   if (s.route) return 22000;
-  return Math.min(26000, 9000 + (s.media ? s.media.length * 5200 : 0) + s.body.join(" ").length * 18);
+  const words = s.body.join(" ").length + (s.captions ? s.captions.then.length + s.captions.now.length : 0);
+  return Math.min(30000, 9000 + (s.media ? s.media.length * 4200 : 0) + words * 16);
+}
+let presentScale = 0;
+function dwell(k) {
+  if (!PRESENT) return baseDwell(k);
+  if (!presentScale) {
+    let sum = 0;
+    for (let j = 1; j < STOPS.length; j++) sum += STOPS[j].talk ? STOPS[j].talk * 1000 : baseDwell(j);
+    presentScale = PRESENT_MS / sum;
+  }
+  if (k === 0) return 4000;
+  return (STOPS[k].talk ? STOPS[k].talk * 1000 : baseDwell(k)) * presentScale;
 }
 function play(on) {
   PLAY.on = on;
@@ -2680,6 +2729,8 @@ function go(k) {
     goals.rot = -THREE.MathUtils.degToRad(s.view.heading);
     goals.focusAmt = 1;
   } else goals.focusAmt = 0;
+  LENS.touched = false;
+  setLens(k, "then", false);
   for (const [key, p] of Object.entries(pinEls)) {
     p.el.classList.toggle("on", s.view.at === key || (s.id === "popup" && key === "selib"));
   }
@@ -2717,8 +2768,14 @@ $("#lightbox").addEventListener("click", (e) => { if (e.target.closest(".lb-img"
 addEventListener("keydown", (e) => {
   if (e.key === "Escape") { closeOverlay("#lightbox"); closeOverlay("#about"); return; }
   if (!$("#lightbox").hidden || !$("#about").hidden) return;
-  if (e.key === "ArrowRight") { pause(); scrollToStop(state.i + 1); }
-  if (e.key === "ArrowLeft") { pause(); scrollToStop(state.i - 1); }
+  if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); pause(); scrollToStop(state.i + 1); startClock(); }
+  if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); pause(); scrollToStop(state.i - 1); }
+  if ((e.key === "s" || e.key === "S") && STOPS[state.i].captions) {
+    const m = sections[state.i].querySelector(".lens").dataset.mode;
+    setLens(state.i, m === "then" ? "now" : "then", true);
+  }
+  if (e.key === "p" || e.key === "P") { play(!PLAY.on); startClock(); }
+  if ((e.key === "t" || e.key === "T") && PRESENT) $("#clock").hidden = !$("#clock").hidden;
   if (e.key === " " && e.target === document.body) { e.preventDefault(); play(!PLAY.on); }
 });
 
@@ -2765,6 +2822,7 @@ function frame(now) {
   stepFades();
   updateCrops(dt);
   for (const c of carousels) c && c.tick(now);
+  { const ls = STOPS[state.i]; if (ls && ls.captions && !LENS.touched && now - PLAY.t0 > LENS_FLIP_MS && sections[state.i].querySelector(".lens").dataset.mode === "then") setLens(state.i, "now", false); }
   if (!state.anim && !state.routeAnim) {
     // a slow, filmed drift while you read: a few degrees around the place and a gentle push in
     if (!state.user && !REDUCED) {
@@ -2892,6 +2950,37 @@ function frame(now) {
     }
   }
   requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- presenter clock (starts on the first step past the title)
+const CLOCK = { t0: 0, el: null };
+function startClock() {
+  if (!PRESENT || CLOCK.t0) return;
+  CLOCK.t0 = performance.now();
+  const tick = () => {
+    const sec = Math.floor((performance.now() - CLOCK.t0) / 1000);
+    CLOCK.el.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    CLOCK.el.dataset.warn = sec >= 225 ? "stop" : sec >= 195 ? "wrap" : "";
+    setTimeout(tick, 250);
+  };
+  tick();
+}
+if (PRESENT) {
+  CLOCK.el = document.createElement("p");
+  CLOCK.el.id = "clock";
+  CLOCK.el.className = "clock";
+  CLOCK.el.textContent = "0:00";
+  CLOCK.el.title = "Presenter clock: T hides it";
+  $("#aboutBtn").after(CLOCK.el); // in the story header, never over the map or a photo
+  $("#next").addEventListener("click", startClock);
+  $("#play").addEventListener("click", startClock);
+  stopsEl.querySelector('[data-a="play"]')?.addEventListener("click", startClock);
+  let idleT = 0;
+  addEventListener("pointermove", () => { document.body.classList.remove("idle"); clearTimeout(idleT); idleT = setTimeout(() => document.body.classList.add("idle"), 2500); });
+  // warm the cache so no photo or clip has to load in front of the class
+  addEventListener("load", () => setTimeout(() => {
+    for (const s of STOPS) for (const m of s.media || []) [m.thumb, m.poster, m.type === "video" ? m.src : null].filter(Boolean).forEach((u) => fetch(u).catch(() => {}));
+  }, 4000));
 }
 
 // ---------------------------------------------------------------- start
