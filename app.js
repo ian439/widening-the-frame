@@ -5,7 +5,7 @@ import { Line2 } from "three/addons/lines/Line2.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { Sky } from "three/addons/objects/Sky.js";
-import { STOPS, SITES, LAYERS, REFERENCES } from "./story.js?v=8";
+import { STOPS, SITES, LAYERS, REFERENCES } from "./story.js?v=9";
 
 // Heights are true scale (1:1). Sun placed to match the shadows in the county's 2025 flight.
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1774,8 +1774,8 @@ function updateGrass() {
 // ---------------------------------------------------------------- the Produce Pop-Up on Quarry Plaza (Wednesdays), as in my November 4 clips:
 // white canopy tents in a row on the plaza, tables with red cloths, crates of produce, and the sign
 const POPUP = (() => {
-  const [sx, sy] = S.sites.quarry;
-  const x0 = sx - 6, y0 = sy - 9; // the open paving just south of the site marker, beside the curved building
+  const [sx, sy] = S.sites.selib;
+  const x0 = sx + 16, y0 = sy - 36; // the brick plaza just south of the Science & Engineering Library (the site marker sits on its roof)
   const g = new THREE.Group();
   const M = (c) => landShader(lam({ color: c }), "popup" + c.toString(16), 1);
   const white = M(0xf3f3f0), frame = M(0x9a9da2), cloth = M(0xa8282a), wood = M(0x8a6b4a), board = M(0x2f3a2c);
@@ -2095,21 +2095,20 @@ function setLineOpacity(l, o) {
 const outlines = {};
 const caseLines = [];
 for (const [key, p] of Object.entries(S.places)) {
+  if (key === "quarry") continue; // the Pop-Up sets up at the Science & Engineering Library, not Quarry Plaza
   const ring = p.ring[0][0] === p.ring.at(-1)[0] && p.ring[0][1] === p.ring.at(-1)[1] ? p.ring : [...p.ring, p.ring[0]];
   caseLines.push(fatLine(ring, 0x1a120b, 6, 1.2, {}, 0));
   outlines[key] = fatLine(ring, COLORS[key], 3, 1.4);
 }
 // the produce's route as a line of light: a soft dark bed, a thin gold core, and pulses of light carrying the food uphill
-const routeCase = fatLine(S.routes.farm_quarry.p, 0x0d0f10, 10, 1.5, {}, 0);
-const routeBase = fatLine(S.routes.farm_quarry.p, 0xf3b46a, 3, 1.7, {}, 0.45);
-const routeDash = fatLine(S.routes.farm_quarry.p, 0xfff4dc, 7, 1.9, { dashed: true, dashSize: 5, gapSize: 46 }, 0);
-const routeFriCase = fatLine(S.routes.farm_selib.p, 0x0d0f10, 6, 1.5, {}, 0);
-const routeFri = fatLine(S.routes.farm_selib.p, 0xf3b46a, 2.5, 1.7, { dashed: true, dashSize: 6, gapSize: 8 }, 0.4);
+const routeCase = fatLine(S.routes.farm_selib.p, 0x0d0f10, 10, 1.5, {}, 0);
+const routeBase = fatLine(S.routes.farm_selib.p, 0xf3b46a, 3, 1.7, {}, 0.45);
+const routeDash = fatLine(S.routes.farm_selib.p, 0xfff4dc, 7, 1.9, { dashed: true, dashSize: 5, gapSize: 46 }, 0);
 
 // route stats for the story text
-const rq = S.routes.farm_quarry.p;
+const rq = S.routes.farm_selib.p;
 const climb = Math.round((groundAt(...rq.at(-1)) - groundAt(...rq[0])) / 10) * 10;
-const TOKENS = { farm_quarry_km: (S.routes.farm_quarry.m / 1000).toFixed(1), farm_quarry_climb: String(climb) };
+const TOKENS = { route_km: (S.routes.farm_selib.m / 1000).toFixed(1), route_climb: String(climb) };
 
 // a small light that walks the route during stop 5
 const crate = new THREE.Mesh(new THREE.SphereGeometry(5, 20, 14), new THREE.MeshBasicMaterial({ color: 0xffd9b0, transparent: true, opacity: 0, depthTest: false }));
@@ -2258,9 +2257,9 @@ const closerBtn = $("#closer");
 closerBtn.addEventListener("click", () => {
   pause();
   if (!CROP.ready && cropBytes) buildCrops();
-  if (STOPS[state.i].view.at === "quarry") {
+  if (STOPS[state.i].view.at === "selib") {
     const [x, y] = POPUP.spot;
-    flyTo({ target: toWorld(x, y, 1.0), dist: 15, pitch: 22, heading: 22 }, 3600); // up the walkway from the south // from the open west side of the plaza, looking at the tents
+    flyTo({ target: toWorld(x, y, 1.0), dist: 22, pitch: 22, heading: -90 }, 3600); // from the open east side of the plaza, looking west at the tents (trees block the south)
     return;
   }
   const [x, y] = CROP.spot || S.sites.farm;
@@ -2275,7 +2274,7 @@ function mediaHTML(media) {
     if (m.type === "video")
       return `<figure class="m-item" data-k="${k}"><video src="${m.src}" poster="${m.poster}" muted loop playsinline preload="metadata" width="${m.w}" height="${m.h}" aria-label="${esc(m.caption)}"></video></figure>`;
     // the story column shows photos about 400 px wide: load the 640 px copy there, the full one only where it's needed
-    const set = m.thumb ? ` srcset="${m.thumb} 640w, ${m.src} ${Math.max(m.w, m.h)}w" sizes="(max-width: 899px) 92vw, 400px"` : "";
+    const set = m.thumb ? ` srcset="${m.thumb} ${m.tw || 960}w, ${m.src} ${m.w}w" sizes="(max-width: 899px) 92vw, 400px"` : "";
     return `<figure class="m-item" data-k="${k}"><img src="${m.thumb || m.src}" data-full="${m.src}"${set} width="${m.w}" height="${m.h}" alt="${esc(m.caption)}" loading="lazy" decoding="async"></figure>`;
   }).join("");
   const hasVideo = media.some((m) => m.type === "video");
@@ -2414,7 +2413,7 @@ STOPS.forEach((s, k) => {
         <li><i class="k-print"></i><span>Glass panels are my photos and video, floating over where I took them. Click one to open it.</span></li>
         <li><i class="k-route"></i><span>The gold line of light is the produce's route from the Farm up to the Pop-Up.</span></li>
       </ul>
-      <dl class="intro-meta"><div><dt>Places</dt><dd>3</dd></div><div><dt>Stops</dt><dd>${STOPS.length - 1}</dd></div><div><dt>Route</dt><dd>${TOKENS.farm_quarry_km} km</dd></div></dl>`;
+      <dl class="intro-meta"><div><dt>Places</dt><dd>3</dd></div><div><dt>Stops</dt><dd>${STOPS.length - 1}</dd></div><div><dt>Route</dt><dd>${TOKENS.route_km} km</dd></div></dl>`;
   }
   sec.innerHTML = html;
   stopsEl.append(sec);
@@ -2502,14 +2501,14 @@ const miniEl = $("#mini");
 {
   const ringPath = (pts) => "M" + pts.map(([x, y]) => `${mx(x)},${my(y)}`).join("L") + "Z";
   const linePath = (pts) => "M" + pts.map(([x, y]) => `${mx(x)},${my(y)}`).join("L");
-  const siteStop = { farm: 1, chadwick: 4, quarry: 6, selib: 6 };
-  const label = { farm: "Farm", chadwick: "Chadwick", quarry: "Pop-Up", selib: "" };
+  const siteStop = { farm: 1, chadwick: 4, selib: 6 };
+  const label = { farm: "Farm", chadwick: "Chadwick", selib: "Pop-Up" };
   let svg = `<svg viewBox="0 0 ${mw.toFixed(0)} ${mh.toFixed(0)}" role="img" aria-label="Overview of the walk">
     <rect width="100%" height="100%" rx="6" fill="#1f2a1c"/>`;
-  for (const [key, p] of Object.entries(S.places)) svg += `<path d="${ringPath(p.ring)}" fill="${CSSC[key]}" fill-opacity="0.22" stroke="${CSSC[key]}" stroke-width="1"/>`;
-  svg += `<path d="${linePath(S.routes.farm_quarry.p)}" fill="none" stroke="#f08a3c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`;
-  svg += `<path d="${linePath(S.routes.farm_selib.p)}" fill="none" stroke="#f08a3c" stroke-width="1.2" stroke-dasharray="3 3"/>`;
+  for (const [key, p] of Object.entries(S.places)) if (key !== "quarry") svg += `<path d="${ringPath(p.ring)}" fill="${CSSC[key]}" fill-opacity="0.22" stroke="${CSSC[key]}" stroke-width="1"/>`;
+  svg += `<path d="${linePath(S.routes.farm_selib.p)}" fill="none" stroke="#f08a3c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`;
   for (const [key, [x, y]] of Object.entries(S.sites)) {
+    if (!(key in siteStop)) continue;
     svg += `<g class="m-site" data-k="${siteStop[key]}"><circle cx="${mx(x)}" cy="${my(y)}" r="5.5" fill="#14110d" stroke="${CSSC[key]}" stroke-width="2"/>`;
     if (label[key]) svg += `<text x="${(+mx(x) + 8).toFixed(1)}" y="${(+my(y) + 3).toFixed(1)}">${label[key]}</text>`;
     svg += `</g>`;
@@ -2714,8 +2713,8 @@ function go(k) {
   buildPrints(k).then(() => carousels[k] && carousels[k].setOn(true));
   updateNow(s, k);
   $("#prev").disabled = k === 0;
-  closerBtn.hidden = !(s.view && ((cropBytes && s.view.at === "farm") || s.view.at === "quarry"));
-  closerBtn.querySelector("span").textContent = s.view && s.view.at === "quarry" ? "Down to the tents" : "Into the rows";
+  closerBtn.hidden = !(s.view && ((cropBytes && s.view.at === "farm") || s.view.at === "selib"));
+  closerBtn.querySelector("span").textContent = s.view && s.view.at === "selib" ? "Down to the tents" : "Into the rows";
   $("#nextLabel").textContent = k === 0 ? "Begin" : k === STOPS.length - 1 ? "Start over" : "Next";
   dotsEl.querySelectorAll("button").forEach((b, j) => {
     b.toggleAttribute("aria-current", false);
@@ -2877,9 +2876,7 @@ function frame(now) {
   setLineOpacity(routeCase, rt * 0.55);
   setLineOpacity(routeBase, rt);
   setLineOpacity(routeDash, rt * 0.9);
-  setLineOpacity(routeFriCase, rt * 0.35);
-  setLineOpacity(routeFri, rt * 0.8);
-  if (!REDUCED) { routeDash.material.dashOffset -= dt * 70; routeFri.material.dashOffset -= dt * 18; }
+  if (!REDUCED) routeDash.material.dashOffset -= dt * 70;
   crate.material.opacity = approach("crate", state.routeAnim ? 1 : 0, dt, 5);
   const bt = approach("buildingTint", L.campus ? 1 : 0, dt);
   for (const m of buildingMats) m.emissive.copy(bHot).multiplyScalar(bt * 0.16);
