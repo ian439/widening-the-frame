@@ -19,6 +19,9 @@ const SUN_AZ = 296, SUN_EL = 40; // degrees: from the west-northwest, matching t
 const stage = $("#stage");
 const canvas = $("#scene");
 const state = { i: -1, layers: {}, anim: null, routeAnim: null, user: false, seen: new Set() };
+// how fast this screen refreshes, measured in the first frames while the page is still light (see PACE)
+const REFRESH = { min: 99 };
+{ let p = 0, n = 0; const f = (t) => { if (p && t - p > 4) REFRESH.min = Math.min(REFRESH.min, t - p); p = t; if (++n < 40) requestAnimationFrame(f); }; requestAnimationFrame(f); }
 
 // ---------------------------------------------------------------- load heights
 const setLoading = (t) => ($("#loadingText").textContent = t);
@@ -67,8 +70,11 @@ const siteXY = (key) => (Array.isArray(key) ? key : S.sites[key]);
 
 // ---------------------------------------------------------------- renderer, sky, light
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true, powerPreference: "high-performance" });
-// resolution adapts to the machine: it starts at up to 1.5x and steps down when frames run slow, back up when there's room
-const QUALITY = { max: Math.min(devicePixelRatio, 1.5), pr: Math.min(devicePixelRatio, 1.5), acc: 0, n: 0, t: 0 };
+// resolution: set once (1.25x on Retina, see QUALITY), checked in the first seconds of the walk (calibrate), then fixed
+// 1.25x on Retina screens: still sharp with antialiasing, and it keeps the redwood stops at 60 fps (1.5x held
+// them near 45). A 1080p projector is 1x anyway. ?pr=1.5 forces a value (for stills).
+const PR_ASK = parseFloat(new URLSearchParams(location.search).get("pr"));
+const QUALITY = { pr: PR_ASK > 0 ? Math.min(PR_ASK, 3) : Math.min(devicePixelRatio, 1.25), cal: null };
 renderer.setPixelRatio(QUALITY.pr);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -188,10 +194,12 @@ const FRAME_GLSL = `
         diffuseColor.rgb = mix(c0, lush, veg * uGrade * uGreen);
       }
       // up close the 3-inch photo goes soft; fine clods and grain in the soil (and grass) fill in below its pixels
-      {
-        float near = (1.0 - uIsBuilding) * (1.0 - smoothstep(40.0, 260.0, distance(cameraPosition, vWPos)));
-        float grain = vnoise(vWPos * 7.0) * 0.55 + vnoise(vWPos * 23.0) * 0.3 + vnoise(vWPos * 61.0) * 0.15 - 0.5;
-        diffuseColor.rgb *= 1.0 + grain * 0.32 * near;
+      if (uIsBuilding < 0.5) {
+        float near = 1.0 - smoothstep(40.0, 260.0, distance(cameraPosition, vWPos));
+        if (near > 0.001) {
+          float grain = vnoise(vWPos * 7.0) * 0.55 + vnoise(vWPos * 23.0) * 0.3 + vnoise(vWPos * 61.0) * 0.15 - 0.5;
+          diffuseColor.rgb *= 1.0 + grain * 0.32 * near;
+        }
       }
       // cloud shadows: soft, slow, broken coastal cloud drifting in off the bay
       {
@@ -201,26 +209,23 @@ const FRAME_GLSL = `
       }
       // steep faces (tree crowns, quarry walls) can't show the photo, which was taken from above: shade them as foliage in shadow
       // contact shading where the ground meets building walls (baked from the footprints)
-      {
+      if (uIsBuilding < 0.5) {
         vec2 auv = vec2((vWPos.x - uAOBox.x) / (uAOBox.y - uAOBox.x), (-vWPos.z - uAOBox.z) / (uAOBox.w - uAOBox.z));
         float inA = step(0.0, auv.x) * step(auv.x, 1.0) * step(0.0, auv.y) * step(auv.y, 1.0);
-        diffuseColor.rgb *= mix(1.0, texture2D(uAO, clamp(auv, 0.0, 1.0)).r, inA * (1.0 - uIsBuilding));
+        diffuseColor.rgb *= mix(1.0, texture2D(uAO, clamp(auv, 0.0, 1.0)).r, inA);
       }
       float steep = (1.0 - uIsBuilding) * smoothstep(0.12, 0.65, 1.0 - normalize(vWNrm).y);
-      float fol = 0.0;
       // forest floor: when the 3D trees stand on this ground, the photo's treetops become shaded understory
       float under = uGround * smoothstep(2.0, 6.0, vFol.x);
       diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.36, 0.38, 0.32), under);
       // forest seen as the flat photo (before its 3D trees load in) takes the same tone as the 3D forest:
       // darker, with the shade between crowns, so the switch to 3D trees doesn't change the colour
       float flatCan = (1.0 - uGround) * (1.0 - uIsBuilding) * smoothstep(2.0, 6.0, vFol.x);
-      float gaps = mix(0.62, 1.0, smoothstep(0.3, 0.7, vnoise(vWPos * 0.22) * 0.65 + vnoise(vWPos * 0.6) * 0.35));
-      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.6, 0.66, 0.6) * gaps, flatCan);
-      // foliage: leaf clumps at two scales, and darker deeper in the crown
-      float clump = vnoise(vWPos * 0.55) * 0.6 + vnoise(vWPos * 1.9) * 0.4;
-      float depth = mix(0.5, 1.0, smoothstep(0.15, 0.95, vFol.y));
-      diffuseColor.rgb *= mix(1.0, mix(0.62, 1.18, clump) * depth, fol);
-      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.5, 0.58, 0.48), steep * mix(0.6, 1.0, fol));
+      if (flatCan > 0.001) {
+        float gaps = mix(0.62, 1.0, smoothstep(0.3, 0.7, vnoise(vWPos * 0.22) * 0.65 + vnoise(vWPos * 0.6) * 0.35));
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.6, 0.66, 0.6) * gaps, flatCan);
+      }
+      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.5, 0.58, 0.48), steep * 0.6);
       float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
       vec2 rel = vWPos.xz - uFocus.xy;
       float cr = cos(uFrameRot), sr = sin(uFrameRot);
@@ -710,7 +715,9 @@ function buildTrees(t, lvl) {
     for (const m of [cards, core]) {
       m.instanceMatrix.needsUpdate = true;
       m.instanceColor.needsUpdate = true;
-      m.castShadow = m.receiveShadow = !PHONE;
+      // mid-distance trees (level 1) still cast shadows but don't take them: at that range it looks the same
+      // and it saves ~15% of the frame over the redwoods
+      m.castShadow = !PHONE; m.receiveShadow = !PHONE && lvl === 2;
       m.computeBoundingSphere();
       group.add(m);
     }
@@ -931,23 +938,36 @@ function requestTile(t, lvl) {
   t.loading[lvl] = true;
   LOD.queue.push({ t, lvl });
 }
+// Tiles arrive decoded off the main thread, but sending one to the GPU while the GPU is busy stalls the
+// frame (70-200 ms in a flight). So decoded tiles wait here and go up one per frame, never mid-flight.
+const UPLOADS = [];
+function stepUploads(flying, frameMs) {
+  if (!UPLOADS.length || flying || frameMs > 24) return;
+  let bi = 0;
+  for (let i = 1; i < UPLOADS.length; i++) if (UPLOADS[i].t.px > UPLOADS[bi].t.px) bi = i;
+  const { t, lvl, tx } = UPLOADS.splice(bi, 1)[0];
+  t.loading[lvl] = false;
+  if (t.target < lvl) { tx.image?.close?.(); tx.dispose(); pump(); return; }
+  renderer.initTexture(tx);
+  t.tex[lvl] = tx;
+  applyTile(t);
+  pump();
+}
 function pump() {
   LOD.queue.sort((a, b) => b.t.px * (b.lvl === 1 ? 1.3 : 1) - a.t.px * (a.lvl === 1 ? 1.3 : 1));
-  while (LOD.busy < LOD.max && LOD.queue.length) {
+  while (LOD.busy < LOD.max && UPLOADS.length < 8 && LOD.queue.length) {
     const { t, lvl } = LOD.queue.shift();
     if (t.target < lvl) { t.loading[lvl] = false; continue; }
     LOD.busy++;
     bmLoader.load(tileURL(t, lvl), (bmp) => {
       LOD.busy--;
-      t.loading[lvl] = false;
-      if (t.target < lvl) { bmp.close?.(); pump(); return; }
+      if (t.target < lvl) { t.loading[lvl] = false; bmp.close?.(); pump(); return; }
       const tx = new THREE.Texture(bmp);
       tx.flipY = false;
       tx.colorSpace = THREE.SRGBColorSpace;
       tx.anisotropy = MAX_ANISO;
       tx.needsUpdate = true;
-      t.tex[lvl] = tx;
-      applyTile(t);
+      UPLOADS.push({ t, lvl, tx }); // t.loading stays set until it's on the GPU, so it isn't fetched twice
       pump();
     }, undefined, () => { LOD.busy--; t.loading[lvl] = false; pump(); });
   }
@@ -991,13 +1011,17 @@ function updateLOD() {
   }
   pump();
   updateFar();
-  // 3D trees for the nearest tiles; farther tiles keep the canopy surface
+  // 3D trees for the nearest tiles; farther tiles keep the canopy surface.
+  // Tree detail follows how big a tile looks in CSS pixels, not device pixels: on a Retina screen the
+  // device-pixel test put full-detail redwoods 650 m out, where a tree is 80 px tall and the simple version
+  // looks the same. That alone held the Pop-Up and Chadwick stops near 35 fps.
+  const cssK = 1 / renderer.getPixelRatio();
   let full = 0, simple = 0;
   // tiles that already have trees keep their place in the queue unless another tile is clearly closer
   const torder = [...tiles].sort((a, b) => b.px * (1 + 0.35 * (b.treeLvl || 0)) - a.px * (1 + 0.35 * (a.treeLvl || 0)));
   for (const t of torder) {
     // a margin around each threshold so a tile near the line doesn't flip back and forth as the camera drifts
-    const cur = t.treeLvl || 0, up = (th) => t.px > th * (cur >= 1 && th === 140 ? 0.7 : cur === 2 && th === 800 ? 0.7 : 1);
+    const cur = t.treeLvl || 0, up = (th) => t.px * cssK > th * (cur >= 1 && th === 140 ? 0.7 : cur === 2 && th === 800 ? 0.7 : 1);
     let lvl = up(800) ? 2 : up(140) ? 1 : 0;
     if (lvl === 2 && full >= TREES.full) lvl = 1;
     if (lvl === 1 && simple >= TREES.simple) lvl = 0;
@@ -2810,16 +2834,54 @@ let last = performance.now();
 const proj = new THREE.Vector3();
 let lastInput = 0;
 for (const ev of ["pointerdown", "pointermove", "wheel", "keydown", "touchstart"]) addEventListener(ev, (e) => { if (ev !== "pointermove" || e.buttons) lastInput = performance.now(); }, { passive: true });
+// Frame pacing. The scene can't hold 120 fps, and frames landing at uneven times (8, 16, 25 ms...) read as
+// judder. On a high-refresh screen, draw on every other refresh: a steady 60. ?fps=max turns this off.
+const PACE = { prev: 0, min: 99, interval: 0, last: -1e9, off: new URLSearchParams(location.search).get("fps") === "max" };
+if (!PACE.off && REFRESH.min < 11) { PACE.min = REFRESH.min; PACE.interval = 1000 / 60; }
+function paceSkip(now) {
+  const d = now - PACE.prev; PACE.prev = now;
+  if (d > 4 && d < PACE.min) { PACE.min = d; PACE.interval = !PACE.off && d < 11 ? 1000 / 60 : 0; }
+  if (!PACE.interval || now - PACE.last >= PACE.interval - 3) { PACE.last = now; return false; }
+  return true;
+}
+const SH_R = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), sunDir).normalize();
+const SH_U = new THREE.Vector3().crossVectors(sunDir, SH_R).normalize(), SH_P = new THREE.Vector3();
+function snapShadow(target) {
+  const texel = (2 * shadowHalf) / sun.shadow.mapSize.x;
+  const r = Math.round(target.dot(SH_R) / texel) * texel, u = Math.round(target.dot(SH_U) / texel) * texel;
+  SH_P.copy(SH_R).multiplyScalar(r).addScaledVector(SH_U, u).addScaledVector(sunDir, target.dot(sunDir));
+  sun.target.position.copy(SH_P);
+  sun.position.copy(SH_P).addScaledVector(sunDir, 5000);
+}
+// One look at the frame rate in the first seconds of the walk: if this machine can't keep up at full
+// resolution, step down once, then leave it alone.
+function calibrate(now, dt) {
+  const C = QUALITY.cal;
+  if (!C.t0) { C.t0 = now; C.sum = 0; C.n = 0; return; }
+  C.sum += dt; C.n++;
+  if (now - C.t0 < 2500) return;
+  const ms = (C.sum / C.n) * 1000;
+  if (ms > 26 && QUALITY.pr > 0.8 && C.steps < 2 && !(PR_ASK > 0)) {
+    QUALITY.pr = Math.max(0.75, +(QUALITY.pr * 0.78).toFixed(2));
+    renderer.setPixelRatio(QUALITY.pr);
+    C.steps++; C.t0 = 0;
+  } else QUALITY.cal = null;
+}
+const PERF = new URLSearchParams(location.search).has("perf") ? { slow: [], mark: 0, parts: {} } : null;
+const pmark = (k) => { if (!PERF) return; const t = performance.now(); PERF.parts[k] = (PERF.parts[k] || 0) + t - PERF.mark; PERF.mark = t; };
 function frame(now) {
+  if (paceSkip(now)) { requestAnimationFrame(frame); return; }
+  if (PERF) { PERF.parts = {}; PERF.mark = PERF.t0 = performance.now(); PERF.prog = renderer.info.programs.length; PERF.tex = renderer.info.memory.textures; PERF.geo = renderer.info.memory.geometries; }
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   U.uTime.value = now / 1000;
   stepAnim(now);
   stepRoute(now);
   stepPlay(now);
-  stepPrints(dt);
+  pmark("steps");
+  stepPrints(dt); pmark("prints");
   stepFades();
-  updateCrops(dt);
+  updateCrops(dt); pmark("crops");
   for (const c of carousels) c && c.tick(now);
   { const ls = STOPS[state.i]; if (ls && ls.captions && !LENS.touched && now - PLAY.t0 > LENS_FLIP_MS && sections[state.i].querySelector(".lens").dataset.mode === "then") setLens(state.i, "now", false); }
   if (!state.anim && !state.routeAnim) {
@@ -2885,42 +2947,43 @@ function frame(now) {
   // keep the camera above the trees and roofs
   const floorY = topAt(camera.position.x, -camera.position.z) + 6;
   if (camera.position.y < floorY) camera.position.y = floorY;
-  // sun shadows follow the view
+  pmark("scene");
+  if (frameNo++ % 6 === 0) { updateLOD(); pmark("lod"); updateMini(); updateGrass(); pmark("grass"); }
+
+  const flying = !!(state.anim || state.routeAnim);
+  // sun shadows follow the view's centre. The shadow camera moves only on frames that redraw the shadow map,
+  // so shadows stay put on the ground in between; it snaps to whole shadow texels, so edges don't crawl.
   if (!PHONE) {
     const dist = camera.position.distanceTo(controls.target);
-    const half = THREE.MathUtils.clamp(dist * 0.75, 140, 1700);
-    if (Math.abs(half - shadowHalf) > shadowHalf * 0.08) {
-      shadowHalf = half;
-      const sc = sun.shadow.camera;
-      sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half;
-      sc.updateProjectionMatrix();
-      sun.shadow.normalBias = (half / 4096) * 3;
+    const shKey = Math.round(controls.target.x / 3) + "," + Math.round(controls.target.z / 3) + "," + Math.round(Math.log2(dist) * 4);
+    const due = flying ? frameNo % 3 === 0 && shKey !== frame.shKey : shKey !== frame.shKey || frameNo % 120 === 0;
+    if (due) {
+      const half = THREE.MathUtils.clamp(dist * 0.75, 140, 1700);
+      if (Math.abs(half - shadowHalf) > shadowHalf * 0.08) {
+        shadowHalf = half;
+        const sc = sun.shadow.camera;
+        sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half;
+        sc.updateProjectionMatrix();
+        sun.shadow.normalBias = (half / 4096) * 3;
+      }
+      snapShadow(controls.target);
+      renderer.shadowMap.needsUpdate = true;
+      frame.shKey = shKey;
     }
-    sun.target.position.copy(controls.target);
-    sun.position.copy(controls.target).addScaledVector(sunDir, 5000);
   }
-  if (frameNo++ % 6 === 0) { updateLOD(); updateMini(); updateGrass(); }
+  stepUploads(flying, dt * 1000);
+  // resolution is set once, early (calibrate); a mid-walk change is a visible blur and a 100+ ms stall
+  if (QUALITY.cal) calibrate(now, dt);
 
-  // when nothing is moving (you're reading), draw every other frame: half the work, and the wind still moves
-  // (the slow drift at each stop counts as still; flights, Play and your own dragging count as moving)
-  const moving = state.anim || state.routeAnim || PLAY.on || now - lastInput < 2500;
-  // shadows follow the view's centre: recompute when that moves a few metres or the zoom changes, and now and then for the wind
-  const shKey = Math.round(controls.target.x / 3) + "," + Math.round(controls.target.z / 3) + "," + Math.round(Math.log2(camera.position.distanceTo(controls.target)) * 4);
-  if (shKey !== frame.shKey || frameNo % 45 === 0) renderer.shadowMap.needsUpdate = !PHONE;
-  frame.shKey = shKey;
-  if (!moving && frameNo % 2) { requestAnimationFrame(frame); return; }
-  // adaptive resolution: average frame time over ~1.5 s, then nudge the pixel ratio
-  QUALITY.acc += dt; QUALITY.n++;
-  if (now - QUALITY.t > 1500 && QUALITY.n > 20) {
-    const ms = (QUALITY.acc / QUALITY.n) * 1000;
-    let pr = QUALITY.pr;
-    if (moving && ms > 26 && pr > 0.75) pr = Math.max(0.75, pr - 0.15);
-    else if (ms < 15 && pr < QUALITY.max) pr = Math.min(QUALITY.max, pr + 0.1);
-    if (pr !== QUALITY.pr) { QUALITY.pr = pr; renderer.setPixelRatio(pr); }
-    QUALITY.acc = 0; QUALITY.n = 0; QUALITY.t = now;
-  }
-
+  pmark("pre");
   renderer.render(scene, camera);
+  pmark("render");
+  if (PERF) {
+    const total = performance.now() - PERF.t0;
+    if (total > 20) PERF.slow.push({ t: Math.round(now), stop: state.i, fly: state.anim || state.routeAnim ? 1 : 0, total: Math.round(total),
+      parts: Object.fromEntries(Object.entries(PERF.parts).filter(([, v]) => v > 1.5).map(([k, v]) => [k, Math.round(v)])),
+      newPrograms: renderer.info.programs.length - PERF.prog, newTex: renderer.info.memory.textures - PERF.tex, newGeo: renderer.info.memory.geometries - PERF.geo });
+  }
 
   // pins
   const w = stage.clientWidth, h = stage.clientHeight;
@@ -2980,6 +3043,33 @@ if (PRESENT) {
   }, 4000));
 }
 
+// ---------------------------------------------------------------- warm-up
+// Everything the walk will need is built while the loading screen is up, its shaders compile off the main
+// thread, and one hidden full draw sends its textures and buffers to the GPU. Nothing builds, compiles or
+// uploads for the first time in the middle of a flight (that was a 150 ms freeze).
+async function warmUp() {
+  setLoading("Getting the walk ready");
+  try { await loadCity(); } catch (e) { console.warn("city", e); }
+  if (cropBytes && !CROP.ready) buildCrops();
+  // one tile's trees at both levels: every other tile reuses these shaders
+  const has = (t) => { const i = t.r * TL.cols + t.c; return TR.offsets[i + 1] - TR.offsets[i] > 50; };
+  const farm = new THREE.Vector3(S.sites.farm[0], 0, -S.sites.farm[1]);
+  const wt = tiles.filter(has).sort((a, b) => a.center.distanceTo(farm) - b.center.distanceTo(farm))[0];
+  if (wt) for (const lvl of [1, 2]) if (!wt.trees[lvl]) { wt.trees[lvl] = buildTrees(wt, lvl); scene.add(wt.trees[lvl]); wt.trees[lvl].visible = false; }
+  const ch = FAR.chunks.find((c) => !c.built);
+  if (ch) { buildFarChunk(ch); ch.group.visible = false; }
+  await Promise.all(STOPS.map((s, k) => buildPrints(k)));
+  const flipped = [], culled = [];
+  scene.traverse((o) => {
+    if (!o.visible) { flipped.push(o); o.visible = true; }
+    if (o.frustumCulled) { culled.push(o); o.frustumCulled = false; }
+  });
+  try { await Promise.race([renderer.compileAsync(scene, camera), new Promise((r) => setTimeout(r, 8000))]); } catch (e) { console.warn("compile", e); }
+  renderer.render(scene, camera);
+  for (const o of flipped) o.visible = false;
+  for (const o of culled) o.frustumCulled = true;
+}
+
 // ---------------------------------------------------------------- start
 const startId = location.hash.slice(1);
 const startIdx = Math.max(0, STOPS.findIndex((s) => s.id === startId));
@@ -2989,7 +3079,7 @@ if (startIdx > 0) requestAnimationFrame(() => (scroller.scrollTop = sections[sta
 U.uFocus.value.set(goals.focus.x, goals.focus.y, goals.focus.z);
 U.uFrameRot.value = goals.rot;
 requestAnimationFrame((t) => { last = t; frame(t); });
-setTimeout(() => $("#loading").classList.add("done"), 250);
-// the city around campus fills in once the walk is already on screen
-setTimeout(() => loadCity().catch((e) => console.warn("city", e)), 1200);
-window.__wtf = { state, camera, controls, go, STOPS, routeBase, routeDash, outlines, cur, U, tiles, LOD, renderer, scene, sun, sunDir, topAt, place, currentView };
+await warmUp();
+$("#loading").classList.add("done");
+QUALITY.cal = { t0: 0, steps: 0 };
+window.__wtf = { PERF, state, camera, controls, go, STOPS, routeBase, routeDash, outlines, cur, U, tiles, LOD, renderer, scene, sun, sunDir, topAt, place, currentView };
